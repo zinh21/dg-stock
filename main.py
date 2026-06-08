@@ -20,7 +20,6 @@ st.caption("yfinance + Plotly 기반 수익률 / 차트 비교 도구")
 
 # ----------------------------
 # 주요 종목 사전 정의
-# (한국 주식은 .KS 또는 .KQ 접미사 필요)
 # ----------------------------
 STOCK_DICT = {
     "🇰🇷 삼성전자": "005930.KS",
@@ -48,7 +47,6 @@ selected_names = st.sidebar.multiselect(
     default=["🇰🇷 삼성전자", "🇺🇸 애플(Apple)", "🇺🇸 엔비디아(NVIDIA)"]
 )
 
-# 기간 선택
 period_option = st.sidebar.selectbox(
     "분석 기간을 선택하세요",
     options=["1개월", "3개월", "6개월", "1년", "3년", "5년"],
@@ -67,7 +65,7 @@ period_map = {
 # ----------------------------
 # 데이터 불러오기 함수 (캐시 사용)
 # ----------------------------
-@st.cache_data(ttl=3600)  # 1시간 캐시
+@st.cache_data(ttl=3600)
 def load_stock_data(ticker, period):
     """yfinance로 주가 데이터를 불러온다."""
     try:
@@ -77,7 +75,7 @@ def load_stock_data(ticker, period):
             progress=False,
             auto_adjust=True
         )
-        # 멀티인덱스 컬럼 처리 (yfinance 버전에 따라 발생)
+        # 멀티인덱스 컬럼 처리
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         return df
@@ -95,9 +93,8 @@ if not selected_names:
 
 period_code = period_map[period_option]
 
-# 종목별 데이터 저장
-price_data = {}   # 종가 데이터
-return_data = {}  # 누적 수익률(%)
+price_data = {}
+return_data = {}
 
 with st.spinner("주가 데이터를 불러오는 중입니다..."):
     for name in selected_names:
@@ -114,11 +111,9 @@ with st.spinner("주가 데이터를 불러오는 중입니다..."):
             continue
 
         price_data[name] = df["Close"]
-        # 누적 수익률 = (현재가 / 시작가 - 1) * 100
         start_price = df["Close"].iloc[0]
         return_data[name] = (df["Close"] / start_price - 1) * 100
 
-# 데이터가 하나도 없으면 중단
 if not price_data:
     st.error("표시할 데이터가 없습니다. 다른 종목이나 기간을 선택해주세요.")
     st.stop()
@@ -130,27 +125,47 @@ st.subheader("📊 기간 수익률 요약")
 
 summary_rows = []
 for name, returns in return_data.items():
-    final_return = returns.iloc[-1]
-    start_price = price_data[name].iloc[0]
-    end_price = price_data[name].iloc[-1]
+    final_return = float(returns.iloc[-1])
+    start_price = float(price_data[name].iloc[0])
+    end_price = float(price_data[name].iloc[-1])
     summary_rows.append({
         "종목": name,
-        "시작가": f"{start_price:,.2f}",
-        "현재가": f"{end_price:,.2f}",
+        "시작가": round(start_price, 2),
+        "현재가": round(end_price, 2),
         "수익률(%)": round(final_return, 2)
     })
 
 summary_df = pd.DataFrame(summary_rows)
 
-# 수익률에 따라 색상 강조
+
+# 수익률 색상 강조 함수
 def highlight_return(val):
-    if isinstance(val, (int, float)):
-        color = "red" if val > 0 else "blue"
-        return f"color: {color}; font-weight: bold;"
-    return ""
+    try:
+        v = float(val)
+    except (ValueError, TypeError):
+        return ""
+    color = "red" if v > 0 else ("blue" if v < 0 else "black")
+    return f"color: {color}; font-weight: bold;"
+
+
+# pandas 버전에 따라 map / applymap 안전하게 적용
+styled_df = summary_df.style
+if hasattr(styled_df, "map"):
+    # pandas 2.1.0 이상
+    styled_df = styled_df.map(highlight_return, subset=["수익률(%)"])
+else:
+    # 구버전 pandas
+    styled_df = styled_df.applymap(highlight_return, subset=["수익률(%)"])
+
+# 숫자 포맷 적용
+styled_df = styled_df.format({
+    "시작가": "{:,.2f}",
+    "현재가": "{:,.2f}",
+    "수익률(%)": "{:+.2f}"
+})
 
 st.dataframe(
-    summary_df.style.applymap(highlight_return, subset=["수익률(%)"]),
+    styled_df,
     use_container_width=True,
     hide_index=True
 )
@@ -181,7 +196,6 @@ fig_return.update_layout(
     height=500,
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
-# 0% 기준선
 fig_return.add_hline(y=0, line_dash="dash", line_color="gray")
 
 st.plotly_chart(fig_return, use_container_width=True)
@@ -201,7 +215,6 @@ if selected_for_detail:
     df_detail = load_stock_data(ticker, period_code)
     df_detail = df_detail.dropna(subset=["Close"])
 
-    # 캔들스틱 차트 (OHLC 데이터가 모두 있을 때만)
     has_ohlc = all(col in df_detail.columns for col in ["Open", "High", "Low", "Close"])
 
     if has_ohlc and len(df_detail) > 1:
@@ -213,7 +226,6 @@ if selected_for_detail:
             subplot_titles=(f"{selected_for_detail} 주가", "거래량")
         )
 
-        # 캔들스틱
         fig_price.add_trace(
             go.Candlestick(
                 x=df_detail.index,
@@ -228,7 +240,6 @@ if selected_for_detail:
             row=1, col=1
         )
 
-        # 거래량 (있을 경우)
         if "Volume" in df_detail.columns:
             fig_price.add_trace(
                 go.Bar(
@@ -249,7 +260,6 @@ if selected_for_detail:
 
         st.plotly_chart(fig_price, use_container_width=True)
     else:
-        # OHLC가 없으면 라인 차트로 대체
         fig_line = go.Figure()
         fig_line.add_trace(
             go.Scatter(
